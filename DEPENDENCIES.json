@@ -1,0 +1,172 @@
+{
+  "python": "3.12.14",
+  "packages": [
+    {
+      "name": "altgraph",
+      "version": "0.17.5",
+      "notices": [
+        "licenses/python-packages/altgraph-0.17.5/LICENSE"
+      ]
+    },
+    {
+      "name": "et_xmlfile",
+      "version": "2.0.0",
+      "notices": [
+        "licenses/python-packages/et_xmlfile-2.0.0/LICENCE.python",
+        "licenses/python-packages/et_xmlfile-2.0.0/LICENCE.rst"
+      ]
+    },
+    {
+      "name": "jaraco.classes",
+      "version": "3.4.0",
+      "notices": [
+        "licenses/python-packages/jaraco.classes-3.4.0/LICENSE"
+      ]
+    },
+    {
+      "name": "jaraco.context",
+      "version": "6.1.2",
+      "notices": [
+        "licenses/python-packages/jaraco.context-6.1.2/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "jaraco.functools",
+      "version": "4.6.0",
+      "notices": [
+        "licenses/python-packages/jaraco.functools-4.6.0/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "keyring",
+      "version": "25.7.0",
+      "notices": [
+        "licenses/python-packages/keyring-25.7.0/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "more-itertools",
+      "version": "11.1.0",
+      "notices": [
+        "licenses/python-packages/more-itertools-11.1.0/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "openpyxl",
+      "version": "3.1.5",
+      "notices": [
+        "licenses/python-packages/openpyxl-3.1.5/LICENCE.rst"
+      ]
+    },
+    {
+      "name": "packaging",
+      "version": "26.3",
+      "notices": [
+        "licenses/python-packages/packaging-26.3/licenses/LICENSE",
+        "licenses/python-packages/packaging-26.3/licenses/LICENSE.APACHE",
+        "licenses/python-packages/packaging-26.3/licenses/LICENSE.BSD"
+      ]
+    },
+    {
+      "name": "pefile",
+      "version": "2024.8.26",
+      "notices": [
+        "licenses/python-packages/pefile-2024.8.26/LICENSE"
+      ]
+    },
+    {
+      "name": "pillow",
+      "version": "12.3.0",
+      "notices": [
+        "licenses/python-packages/pillow-12.3.0/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "pillow_heif",
+      "version": "1.8.0+receiptledger1",
+      "notices": [
+        "licenses/python-packages/pillow_heif-1.8.0+receiptledger1/licenses/LICENSE.libde265.txt",
+        "licenses/python-packages/pillow_heif-1.8.0+receiptledger1/licenses/LICENSE.libheif.txt",
+        "licenses/python-packages/pillow_heif-1.8.0+receiptledger1/licenses/LICENSE.txt",
+        "licenses/python-packages/pillow_heif-1.8.0+receiptledger1/licenses/LICENSES_bundled.txt"
+      ]
+    },
+    {
+      "name": "pyinstaller",
+      "version": "6.22.3",
+      "notices": [
+        "licenses/python-packages/pyinstaller-6.22.3/licenses/COPYING.txt"
+      ]
+    },
+    {
+      "name": "pyinstaller-hooks-contrib",
+      "version": "2026.7",
+      "notices": [
+        "licenses/python-packages/pyinstaller-hooks-contrib-2026.7/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "PySide6",
+      "version": "6.11.2",
+      "notices": [
+        "licenses/python-packages/PySide6-6.11.2/licenses/LicenseRef-Qt-Commercial.txt"
+      ]
+    },
+    {
+      "name": "PySide6_Addons",
+      "version": "6.11.2",
+      "notices": [
+        "licenses/python-packages/PySide6_Addons-6.11.2/licenses/LicenseRef-Qt-Commercial.txt"
+      ]
+    },
+    {
+      "name": "PySide6_Essentials",
+      "version": "6.11.2",
+      "notices": [
+        "licenses/python-packages/PySide6_Essentials-6.11.2/licenses/LicenseRef-Qt-Commercial.txt"
+      ]
+    },
+    {
+      "name": "pywin32-ctypes",
+      "version": "0.2.3",
+      "notices": [
+        "licenses/python-packages/pywin32-ctypes-0.2.3/LICENSE.txt"
+      ]
+    },
+    {
+      "name": "setuptools",
+      "version": "84.0.0",
+      "notices": [
+        "licenses/python-packages/setuptools-84.0.0/licenses/LICENSE",
+        "licenses/python-packages/setuptools-84.0.0/_vendor/autocommand-2.2.2.dist-info/LICENSE",
+        "licenses/python-packages/setuptools-84.0.0/_vendor/backports.tarfile-1.2.0.dist-info/LICENSE",
+        "licenses/python-packages/setuptools-84.0.0/_vendor/importlib_metadata-8.7.1.dist-info/licenses/LICENSE",
+        "licenses/python-packages/setuptools-84.0.0/_vendor/jaraco.text-4.0.0.dist-info/LICENSE",
+        "licenses/python-packages/setuptools-84.0.0/_vendor/jaraco_context-6.1.0.dist-info/licenses/LICENSE",
+        "licenses/python-packages/setuptools-84.0.0/_vendor/jaraco_functools-4.4.0.dist-info/licenses/LICENSE",
+        "licenses/python-packages/setuptools-84.0.0/_vendor/more_itertools-10.8.0.dist-info/licenses/LICENSE",
+        "licenses/python-packages/setuptools-84.0.0/_vendor/packaging-26.0.dist-info/licenses/LICENSE",
+        "licenses/python-packages/setuptools-84.0.0/_vendor/packaging-26.0.dist-info/licenses/LICENSE.APACHE",
+        "licenses/python-packages/setuptools-84.0.0/_vendor/packaging-26.0.dist-info/licenses/LICENSE.BSD",
+        "licenses/python-packages/setuptools-84.0.0/_vendor/platformdirs-4.4.0.dist-info/licenses/LICENSE",
+        "licenses/python-packages/setuptools-84.0.0/_vendor/tomli-2.4.0.dist-info/licenses/LICENSE",
+        "licenses/python-packages/setuptools-84.0.0/_vendor/wheel-0.46.3.dist-info/licenses/LICENSE.txt",
+        "licenses/python-packages/setuptools-84.0.0/_vendor/zipp-3.23.0.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "shiboken6",
+      "version": "6.11.2",
+      "notices": [
+        "licenses/python-packages/shiboken6-6.11.2/licenses/LicenseRef-Qt-Commercial.txt"
+      ]
+    }
+  ],
+  "note": "Includes build dependencies. Qt/Pillow source license directories include notices for upstream optional components; these do not imply all components are in the Windows app.",
+  "extra_notice_sources": {
+    "OpenSSL/LICENSE.txt": "https://raw.githubusercontent.com/openssl/openssl/openssl-3.5.8/LICENSE.txt",
+    "OpenSSL/AUTHORS.md": "https://raw.githubusercontent.com/openssl/openssl/openssl-3.5.8/AUTHORS.md",
+    "libffi/LICENSE.txt": "https://raw.githubusercontent.com/libffi/libffi/v3.4.4/LICENSE",
+    "Microsoft/VC-Runtime.docx": "https://visualstudio.microsoft.com/wp-content/uploads/2021/09/Visual-C-Runtime-2015-2022-License-1.docx"
+  }
+}

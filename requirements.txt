@@ -1,0 +1,6 @@
+PySide6==6.11.2
+openpyxl==3.1.5
+Pillow==12.3.0
+./vendor/pillow_heif-1.8.0+receiptledger1-cp312-cp312-win_amd64.whl
+keyring==25.7.0
+pyinstaller==6.22.3

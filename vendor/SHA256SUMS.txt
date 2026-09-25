@@ -1,0 +1,1 @@
+8c221a00607a92bb324552a6421df3ce3d88095e05d314a7850bc21daac0e970  pillow_heif-1.8.0+receiptledger1-cp312-cp312-win_amd64.whl
