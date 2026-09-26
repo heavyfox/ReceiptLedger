@@ -26,7 +26,7 @@ class TaxTotalsTests(unittest.TestCase):
             self.assertEqual(rows["合計（税込）"], (697, None))
             self.assertEqual(book["支出一覧"]["E2"].value, 697)
             self.assertEqual(book["支出一覧"]["J2"].value, 51)
-            self.assertEqual(book["月別集計"]["C2"].value, 697)
+            self.assertEqual(book["月別集計"]["C10"].value, 697)
             self.assertEqual(len(ledger.load()[0].items), 4)
             book.close()
 

@@ -85,6 +85,92 @@ class BatchTests(unittest.TestCase):
             self.window.queue.setCurrentRow(i)
             self.window._mark_reviewed()
 
+    def test_parallel_results_editing_failure_and_stop(self):
+        paths = self.add_images(["slow.png", "fast.png", "failed.png", "unsent.png"])
+        self.window.concurrency_box.setCurrentIndex(self.window.concurrency_box.findData(2))
+        lock = threading.Lock()
+        calls = []
+        active = 0
+        peak = 0
+        first_started = threading.Event()
+        third_started = threading.Event()
+
+        def extract(path, model):
+            nonlocal active, peak
+            with lock:
+                calls.append(path)
+                active += 1
+                peak = max(peak, active)
+            try:
+                if path == paths[0]:
+                    first_started.set()
+                    self.release.wait(5)
+                elif path == paths[1]:
+                    if not first_started.wait(5):
+                        raise RuntimeError("Requests did not overlap")
+                elif path == paths[2]:
+                    third_started.set()
+                    self.release.wait(5)
+                    raise RuntimeError("Test server error")
+                return result_for(path)
+            finally:
+                with lock:
+                    active -= 1
+
+        with patch("app.LMStudioClient") as client:
+            client.return_value.extract.side_effect = extract
+            self.window._read_batch()
+            self.wait_until(lambda: third_started.is_set() and self.window.entries[paths[1]].state == "ready")
+            self.assertEqual(self.window.entries[paths[0]].state, "reading")
+            self.assertEqual(self.window.batch_progress.value(), 1)
+            self.window.queue.setCurrentRow(1)
+            self.assertTrue(self.window.receipt_editor.isEnabled())
+            self.window.merchant_edit.setText("並列解析中の修正")
+            self.window.concurrency_box.setCurrentIndex(0)
+            self.assertEqual(self.window.batch_worker.concurrency, 2)
+            self.window._stop_batch()
+            self.release.set()
+            self.wait_until(lambda: not self.window.workers)
+        self.assertEqual(peak, 2)
+        self.assertCountEqual(calls, paths[:3])
+        self.assertEqual([self.window.entries[p].state for p in paths], ["ready", "ready", "failed", "pending"])
+        self.assertEqual(self.window.entries[paths[1]].draft.merchant, "並列解析中の修正")
+        self.assertEqual(self.window.entries[paths[0]].draft.merchant, "slow")
+        self.assertEqual(self.window.batch_progress.value(), 3)
+
+    def test_missing_tax_confirmation_names_only_missing_images(self):
+        paths = self.add_images(["missing-tax.png", "zero-tax.png"])
+        for path, tax in zip(paths, (None, 0)):
+            result = result_for(path)
+            result.tax_yen = tax
+            self.window._batch_image_succeeded(path, result)
+        self.mark_all()
+        with patch("app.QMessageBox.question", return_value=QMessageBox.StandardButton.No) as question:
+            self.window._save_batch()
+        message = question.call_args.args[2]
+        section = message.split("消費税額が未記入:")[1].split("確認事項:")[0]
+        self.assertIn("missing-tax.png", section)
+        self.assertNotIn("zero-tax.png", section)
+        self.assertFalse(self.window.ledger.path.exists())
+        self.assertEqual(self.window.queue_filter.itemText(self.window.queue_filter.findData("ready")), "確認待ち")
+
+    def test_many_missing_taxes_can_be_read_in_dialog_details(self):
+        paths = self.add_images([f"receipt-{i:02d}.png" for i in range(12)])
+        for path in paths:
+            result = result_for(path)
+            result.tax_yen = None
+            self.window._batch_image_succeeded(path, result)
+        self.mark_all()
+        observed = {}
+        def reject(dialog):
+            observed["details"] = dialog.detailedText()
+            return QMessageBox.StandardButton.No
+        with patch("app.QMessageBox.exec", new=reject):
+            self.window._save_batch()
+        for path in paths:
+            self.assertIn(Path(path).name, observed["details"])
+        self.assertFalse(self.window.ledger.path.exists())
+
     def test_failure_retry_corrections_and_one_batch_save(self):
         paths = self.add_images(["first.png", "bad.png", "last.heic"])
         calls = []
@@ -366,7 +452,7 @@ class BatchTests(unittest.TestCase):
         book = load_workbook(self.window.ledger.path, data_only=True)
         self.assertEqual({row[2]: (row[4], row[9]) for row in book["支出一覧"].iter_rows(min_row=2, values_only=True)},
                          {f"tax-{i}": (c[0], c[3]) for i, c in enumerate(cases)})
-        self.assertEqual(book["月別集計"]["C2"].value, 4560)
+        self.assertEqual(book["月別集計"]["C10"].value, 4560)
         displayed = "\n".join(str(c.value) for row in book["レシート別"] for c in row if c.value is not None)
         self.assertIn("税込合計 2,180 円", displayed)
         self.assertIn("うち消費税額: 180 円", displayed)

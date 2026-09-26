@@ -16,6 +16,31 @@ from lm_client import LMStudioClient, LMStudioError, normalize_base_url, _parse_
 
 
 class LedgerTests(unittest.TestCase):
+    def test_monthly_view_includes_empty_month_and_cross_year(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "months.xlsx"
+            store = ExcelLedger(path)
+            store.save([Receipt(purchased_on=date(2025, 12, 1), merchant="A", amount=100, category="食費"),
+                        Receipt(purchased_on=date(2026, 2, 1), merchant="B", amount=200, category="日用品")])
+            book = load_workbook(path)
+            ws = book["月別集計"]
+            self.assertEqual([ws.cell(r, 2).value.strftime("%Y-%m") for r in (10, 11, 12)],
+                             ["2025-12", "2026-01", "2026-02"])
+            self.assertEqual([ws.cell(r, 3).value for r in (10, 11, 12, 13)], [100, 0, 200, 300])
+            self.assertEqual(ws["D11"].value, 0)
+            self.assertEqual(len(ws._charts), 2)
+            self.assertEqual([p.v for p in ws._charts[0].series[0].cat.strLit.pt], ["12月"])
+            self.assertEqual([p.v for p in ws._charts[1].series[0].cat.strLit.pt], ["1月", "2月"])
+            for chart in ws._charts:
+                self.assertTrue(chart.dLbls.showVal)
+                self.assertEqual(chart.dLbls.numFmt, '#,##0"円"')
+                self.assertEqual(chart.x_axis.tickLblSkip, 1)
+            self.assertEqual(ws._charts[1].series[0].val.numRef.f, "'月別集計'!$C$11:$C$12")
+            self.assertEqual(ws.freeze_panes, "A10")
+            self.assertEqual(ws.sheet_view.pane.xSplit, None)
+            self.assertEqual(len(store.load()), 2)
+            book.close()
+
     def test_receipt_views_show_items_and_details(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "household.xlsx"
@@ -82,10 +107,11 @@ class LedgerTests(unittest.TestCase):
             ]
             store.save(records)
             book = load_workbook(path, data_only=True)
-            values = {(row[0], row[1]): (row[2], row[3]) for row in
-                      book["月別集計"].iter_rows(min_row=2, values_only=True)}
-            self.assertEqual(values[("2026-09", "食費")], (800, 2))
-            self.assertEqual(values[("2026-08", "日用品")], (500, 1))
+            ws = book["月別集計"]
+            self.assertEqual(ws["B10"].value.strftime("%Y-%m"), "2026-08")
+            self.assertEqual((ws["C10"].value, ws["D10"].value, ws["F10"].value), (500, 1, 500))
+            self.assertEqual((ws["C11"].value, ws["D11"].value, ws["E11"].value), (800, 2, 800))
+            self.assertEqual(ws["C12"].value, 1300)
             self.assertEqual(sum(r.amount for r in store.load()), 1300)
 
     def test_round_trip_summary_formula_text_and_backup(self):
@@ -103,7 +129,7 @@ class LedgerTests(unittest.TestCase):
             self.assertEqual(loaded[0].items[1].amount, 500)
             book = load_workbook(path)
             self.assertEqual(book["支出一覧"]["C2"].data_type, "s")
-            self.assertEqual(book["月別集計"]["C2"].value, 680)
+            self.assertEqual(book["月別集計"]["C10"].value, 680)
             receipt.amount = 700
             backup = store.save([receipt])
             self.assertTrue(backup.exists())

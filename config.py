@@ -63,6 +63,7 @@ def app_data_dir() -> Path:
 class Settings:
     server_url: str = "http://localhost:1234/v1"
     model: str = ""
+    concurrent_reads: int = 1
     model_choices: list[str] = field(default_factory=list)
     workbook_path: str = ""
     keep_images: bool = True
@@ -81,6 +82,8 @@ class Settings:
                 return cls()
             result = cls(**{key: data[key] for key in cls.__dataclass_fields__ if key in data})
             defaults = cls()
+            if type(result.concurrent_reads) is not int or result.concurrent_reads not in (1, 2):
+                result.concurrent_reads = 1
             for key in ("server_url", "model", "workbook_path", "image_folder", "theme"):
                 if not isinstance(getattr(result, key), str):
                     setattr(result, key, getattr(defaults, key))

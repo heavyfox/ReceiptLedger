@@ -56,7 +56,9 @@ if __name__ == "__main__":
                                            "merchant": "一括テスト", "total_yen": 123})
 
             batch_results = []
-            reader = BatchReadWorker([str(heic), str(heic)], TestClient(), "test", window)
+            window.concurrency_box.setCurrentIndex(window.concurrency_box.findData(2))
+            assert Settings.load().concurrent_reads == 2
+            reader = BatchReadWorker([str(heic), str(heic)], TestClient(), "test", window, concurrency=2)
             reader.image_succeeded.connect(lambda path, result: batch_results.append(result))
             reader.start()
             assert reader.wait(10000)
@@ -87,8 +89,9 @@ if __name__ == "__main__":
             assert "非表示 1 件" in recovered.review_count_label.text()
             recovered.close()
             filtered = MainWindow()
-            assert filtered.queue_filter.currentData() == "ready"
-            assert filtered.queue_search.text() == "該当なし"
+            assert filtered.queue_filter.currentData() == "all"
+            assert filtered.queue_search.text() == ""
+            assert not filtered.queue.item(0).isHidden()
             assert filtered.entries[str(heic)].checked
             filtered.clear_checks_btn.click()
             assert not filtered.entries[str(heic)].checked

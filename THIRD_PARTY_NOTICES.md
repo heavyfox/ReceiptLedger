@@ -2,7 +2,7 @@
 
 ## この配布物
 
-ReceiptLedger 1.2.2の独自コード・アイコン・説明書・架空のテスト画像はMITライセンスです。第三者のコード、共有ライブラリ、フォントエンジン、画像コーデック等には、それぞれのライセンスが適用されます。著作権は各権利者に帰属します。
+ReceiptLedger 1.4.1の独自コード・アイコン・説明書・架空のテスト画像はMITライセンスです。第三者のコード、共有ライブラリ、フォントエンジン、画像コーデック等には、それぞれのライセンスが適用されます。著作権は各権利者に帰属します。
 
 | 部品 | 使用版 | 主な適用条件・同梱文書 |
 |---|---|---|
@@ -33,8 +33,8 @@ pillow-heif本体への変更は、DLL探索パスの登録、専用バージョ
 
 Windows版と同じ配布場所に、次を提供します。
 
-- `ReceiptLedger-v1.2.2-source.zip`: アプリのソース、ビルドスクリプト、専用HEIC wheel、ライセンス。
-- `ReceiptLedger-v1.2.2-third-party-sources.zip`: Qt Base / PySide / Shiboken / libheif / libde265 / pillow-heifの対応する元ソースと変更手順、取得元・ハッシュ一覧。
+- `ReceiptLedger-v1.4.1-source.zip`: アプリのソース、ビルドスクリプト、専用HEIC wheel、ライセンス。
+- `ReceiptLedger-v1.4.1-third-party-sources.zip`: Qt Base / PySide / Shiboken / libheif / libde265 / pillow-heifの対応する元ソースと変更手順、取得元・ハッシュ一覧。
 
 公開担当者はこの2つをWindows版と同じReleaseへ無償で添付してください。ローカル準備段階では、同じ出力フォルダにあります。対応ソースはインストールや通常利用には不要です。
 

@@ -1,4 +1,6 @@
-"""Per-image receipt drafts and sequential local-server extraction."""
+"""Per-image receipt drafts and bounded local-server extraction."""
+
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -115,21 +117,37 @@ class BatchReadWorker(QThread):
     image_failed = Signal(str, str)
     progress = Signal(int, int)
 
-    def __init__(self, paths, client, model, parent=None, source_paths=None):
+    def __init__(self, paths, client, model, parent=None, source_paths=None, concurrency=1):
         super().__init__(parent)
         self.paths = tuple(paths)
         self.client = client
         self.model = model
         self.source_paths = source_paths or {}
+        self.concurrency = max(1, min(2, int(concurrency)))
 
     def run(self):
-        for index, path in enumerate(self.paths, 1):
-            if self.isInterruptionRequested():
-                break
-            self.image_started.emit(path, index, len(self.paths))
-            try:
-                result = self.client.extract(self.source_paths.get(path, path), self.model)
-                self.image_succeeded.emit(path, result)
-            except Exception as exc:
-                self.image_failed.emit(path, str(exc))
-            self.progress.emit(index, len(self.paths))
+        next_index = 0
+        completed = 0
+        active = {}
+        # Submit only as many requests as there are slots. Stopping leaves all
+        # unsent images untouched and drains the requests already in flight.
+        with ThreadPoolExecutor(max_workers=self.concurrency) as pool:
+            while active or next_index < len(self.paths):
+                while (not self.isInterruptionRequested()
+                       and next_index < len(self.paths) and len(active) < self.concurrency):
+                    path = self.paths[next_index]
+                    next_index += 1
+                    self.image_started.emit(path, next_index, len(self.paths))
+                    future = pool.submit(self.client.extract, self.source_paths.get(path, path), self.model)
+                    active[future] = path
+                if not active:
+                    break
+                finished, _ = wait(active, timeout=0.05, return_when=FIRST_COMPLETED)
+                for future in finished:
+                    path = active.pop(future)
+                    try:
+                        self.image_succeeded.emit(path, future.result())
+                    except Exception as exc:
+                        self.image_failed.emit(path, str(exc))
+                    completed += 1
+                    self.progress.emit(completed, len(self.paths))

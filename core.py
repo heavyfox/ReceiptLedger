@@ -12,6 +12,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.chart import BarChart, Reference
+from openpyxl.chart.label import DataLabelList
+from openpyxl.chart.text import RichText
+from openpyxl.drawing.text import Paragraph, ParagraphProperties, CharacterProperties
+from openpyxl.chart.data_source import AxDataSource, StrData, StrVal
+from openpyxl.formatting.rule import DataBarRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.hyperlink import Hyperlink
@@ -122,7 +128,7 @@ def _build_receipt_sheet(ws, receipts: list[Receipt]) -> dict[str, int]:
             _display_cell(ws, row, 8, item.note, fill=band)
             for col in (6, 7):
                 ws.cell(row, col).number_format = YEN_FORMAT
-            ws.row_dimensions[row].height = 31 if item.note else 26
+            ws.row_dimensions[row].height = 35 if item.note else 26
             row += 1
         value = sum(item.amount for item in receipt.items if item.amount is not None)
         treatment = tax_treatment(receipt)
@@ -224,6 +230,118 @@ def _build_dashboard(ws, receipts: list[Receipt], anchors: dict[str, int]):
     ws.freeze_panes = "B9"
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_setup.fitToWidth = 1
+
+
+def _build_monthly_summary(ws, receipts):
+    """A chronological monthly overview, refreshed whenever the ledger is saved."""
+    ws.sheet_view.showGridLines = False
+    ws.sheet_view.zoomScale = 85
+    ws.sheet_properties.tabColor = "3E9A87"
+    ws.column_dimensions["A"].width = 3
+    for col in range(2, 13):
+        ws.column_dimensions[get_column_letter(col)].width = 16 if col < 4 else 13
+    ws.column_dimensions["D"].width = 9
+    ws.merge_cells("B2:L2")
+    _display_cell(ws, 2, 2, "月別集計 ｜ 支出の推移と内訳", bold=True, color="FFFFFF", fill=NAVY, size=20)
+    ws.row_dimensions[2].height = 42
+    ws.merge_cells("B3:L3")
+    _display_cell(ws, 3, 2, "金額は税込・費目はレシート単位。— は0円です。アプリで「Excelを保存」すると更新します。", color=MUTED, size=10)
+    ws.row_dimensions[3].height = 28
+    months = {}
+    for receipt in receipts:
+        key = receipt.purchased_on.strftime("%Y-%m")
+        group = months.setdefault(key, {"count": 0, "total": 0, **dict.fromkeys(CATEGORIES, 0)})
+        group["count"] += 1
+        group["total"] += receipt.amount
+        group[receipt.category] += receipt.amount
+    cards = ((2, 4, "累計支出（税込）", sum(r.amount for r in receipts), YEN_FORMAT),
+             (5, 8, "レシート件数", len(receipts), '#,##0"件"'),
+             (9, 12, "記録のある月", len(months), '0"か月"'))
+    for first, last, label, value, fmt in cards:
+        for row in (5, 6):
+            ws.merge_cells(start_row=row, start_column=first, end_row=row, end_column=last)
+            for col in range(first, last + 1):
+                ws.cell(row, col).fill = PatternFill("solid", fgColor=PALE)
+        _display_cell(ws, 5, first, label, bold=True, color=MUTED, fill=PALE, size=10)
+        _display_cell(ws, 6, first, value, bold=True, color=BLUE, fill=PALE, size=22).number_format = fmt
+    ws.row_dimensions[5].height = 25
+    ws.row_dimensions[6].height = 40
+    ws.merge_cells("B8:D8")
+    ws.merge_cells("E8:L8")
+    _display_cell(ws, 8, 2, "月ごとの支出", bold=True, color=BLUE, size=12)
+    _display_cell(ws, 8, 5, "費目別の内訳", bold=True, color=BLUE, size=12)
+    ws.row_dimensions[8].height = 30
+    for col, label in enumerate(("年月", "税込合計", "件数", *CATEGORIES), 2):
+        _display_cell(ws, 9, col, label, bold=True, color="FFFFFF", fill=NAVY if col < 5 else BLUE, align="center")
+    ws.row_dimensions[9].height = 30
+    keys = []
+    if months:
+        first, last = min(months), max(months)
+        year, month = map(int, first.split("-"))
+        while f"{year:04d}-{month:02d}" <= last:
+            keys.append(f"{year:04d}-{month:02d}")
+            year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    for row, key in enumerate(keys, 10):
+        group = months.get(key, {"count": 0, "total": 0, **dict.fromkeys(CATEGORIES, 0)})
+        fill = LIGHT if row % 2 == 0 else "FFFFFF"
+        year, month = map(int, key.split("-"))
+        _display_cell(ws, row, 2, date(year, month, 1), fill=fill).number_format = 'yyyy"年"m"月"'
+        for col, value in enumerate((group["total"], group["count"], *(group[c] for c in CATEGORIES)), 3):
+            cell = _display_cell(ws, row, col, value, fill=PALE if col == 3 else fill,
+                                 bold=col == 3, color=MUTED if value == 0 else NAVY, align="center" if col == 4 else "right")
+            cell.number_format = '#,##0"件"' if col == 4 else '#,##0"円";[Red]-#,##0"円";"—"'
+        ws.row_dimensions[row].height = 35
+    if keys:
+        last_row = 9 + len(keys)
+        ws.auto_filter.ref = f"B9:L{last_row}"
+        ws.conditional_formatting.add(f"C10:C{last_row}", DataBarRule(start_type="min", end_type="max", color="D5E8EB", showValue=True))
+        total_row = last_row + 1
+        _display_cell(ws, total_row, 2, "合計", bold=True, fill=PALE)
+        for col in range(3, 13):
+            value = sum(ws.cell(row, col).value for row in range(10, last_row + 1))
+            _display_cell(ws, total_row, col, value, bold=True, fill=PALE, align="right").number_format = '#,##0"件"' if col == 4 else YEN_FORMAT
+        ws.row_dimensions[total_row].height = 34
+        years = sorted({key[:4] for key in keys})
+        for offset, year in enumerate(years):
+            year_keys = [key for key in keys if key[:4] == year]
+            first_row = 10 + keys.index(year_keys[0])
+            end_row = first_row + len(year_keys) - 1
+            chart = BarChart()
+            chart.title = f"{year}年 ｜ 月ごとの支出（税込）"
+            chart.y_axis.title = "金額（円）"
+            chart.add_data(Reference(ws, min_col=3, min_row=first_row, max_row=end_row))
+            chart.series[0].cat = AxDataSource(strLit=StrData(ptCount=len(year_keys),
+                pt=[StrVal(idx=i, v=f"{int(key[5:])}月") for i, key in enumerate(year_keys)]))
+            chart.legend = None
+            chart.width, chart.height = 30, 12
+            chart.style = 10
+            chart.gapWidth = 65
+            chart.series[0].graphicalProperties.solidFill = BLUE
+            chart.series[0].graphicalProperties.line.noFill = True
+            chart.y_axis.numFmt = '#,##0"円"'
+            chart.x_axis.tickLblPos = "low"
+            chart.x_axis.tickLblSkip = 1
+            chart.x_axis.txPr = RichText(p=[Paragraph(pPr=ParagraphProperties(defRPr=CharacterProperties(sz=1200, b=True)))])
+            chart.dLbls = DataLabelList(showVal=True, showLegendKey=False,
+                showCatName=False, showSerName=False, dLblPos="outEnd", numFmt='#,##0"円"')
+            chart.dLbls.txPr = RichText(p=[Paragraph(pPr=ParagraphProperties(defRPr=CharacterProperties(sz=1100, b=True)))])
+            values = [ws.cell(row, 3).value for row in range(first_row, end_row + 1)]
+            chart.y_axis.scaling.max = max(1, max(values)) * 1.2
+            chart.y_axis.scaling.min = min(0, min(values) * 1.2)
+            ws.add_chart(chart, f"B{total_row + 3 + offset * 27}")
+        bottom = total_row + 3 + len(years) * 27
+    else:
+        ws.merge_cells("B10:L10")
+        _display_cell(ws, 10, 2, "レシートを記録すると、ここに月ごとの支出とグラフが表示されます。", color=MUTED)
+        ws.row_dimensions[10].height = 35
+        bottom = 11
+    ws.freeze_panes = "A10"
+    ws.print_area = f"B2:L{bottom}"
+    ws.print_title_rows = "9:9"
+    ws.page_setup.orientation = "landscape"
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
 
 
 class LedgerError(Exception):
@@ -455,7 +573,7 @@ class ExcelLedger:
             expense_ws = book.create_sheet(EXPENSE_SHEET, 2)
             item_ws = book.create_sheet(ITEM_SHEET, 3)
             summary_ws = book.create_sheet(SUMMARY_SHEET, 4)
-            for ws, columns in ((expense_ws, EXPENSE_COLUMNS), (item_ws, ITEM_COLUMNS), (summary_ws, SUMMARY_COLUMNS)):
+            for ws, columns in ((expense_ws, EXPENSE_COLUMNS), (item_ws, ITEM_COLUMNS)):
                 ws.append(columns)
                 ws.freeze_panes = "A2"
                 ws.sheet_view.showGridLines = False
@@ -510,26 +628,9 @@ class ExcelLedger:
                     item_ws.cell(item_row, 4).number_format = "General"
                     for col in (5, 6):
                         item_ws.cell(item_row, col).number_format = YEN_FORMAT
-            totals: dict[tuple[str, str], list[int]] = {}
-            for receipt in receipts:
-                key = (receipt.purchased_on.strftime("%Y-%m"), receipt.category)
-                value = totals.setdefault(key, [0, 0])
-                value[0] += receipt.amount
-                value[1] += 1
-            for (month, category), (total, count) in sorted(totals.items()):
-                summary_ws.append((month, category, total, count))
-                _safe_text(summary_ws.cell(summary_ws.max_row, 1), month)
-                _safe_text(summary_ws.cell(summary_ws.max_row, 2), category)
-                summary_ws.cell(summary_ws.max_row, 3).number_format = YEN_FORMAT
-                band = LIGHT if summary_ws.max_row % 2 == 0 else "FFFFFF"
-                for cell in summary_ws[summary_ws.max_row]:
-                    cell.fill = PatternFill("solid", fgColor=band)
-                    cell.font = Font(name="Yu Gothic", size=10, color=NAVY)
-                    cell.alignment = Alignment(vertical="center")
-                summary_ws.row_dimensions[summary_ws.max_row].height = 28
+            _build_monthly_summary(summary_ws, receipts)
             for ws, widths in ((expense_ws, [34, 16, 26, 15, 15, 18, 34, 20, 38, 13, 13, 21, 21]),
-                               (item_ws, [34, 10, 32, 12, 14, 14, 15, 32]),
-                               (summary_ws, [16, 17, 18, 12])):
+                               (item_ws, [34, 10, 32, 12, 14, 14, 15, 32])):
                 for index, width in enumerate(widths, 1):
                     ws.column_dimensions[get_column_letter(index)].width = width
                 ws.auto_filter.ref = ws.dimensions

@@ -121,7 +121,7 @@ class MainWindow(QMainWindow):
         QApplication.instance().installEventFilter(self.drop_filter)
         self._new_form()
         self._load_ledger()
-        self._restore_session()
+        self._restore_session(reset_filters=True)
         self._restoring_session = False
         self.autosave_timer = QTimer(self)
         self.autosave_timer.setInterval(1000)
@@ -191,7 +191,7 @@ class MainWindow(QMainWindow):
             raise ValueError("商品明細の形式が不正です")
         return draft
 
-    def _restore_session(self):
+    def _restore_session(self, *, reset_filters=False):
         try:
             data = self.session_store.load()
             if not data:
@@ -269,10 +269,10 @@ class MainWindow(QMainWindow):
             self.preview.restore_state(data.get("view") or {})
             self.details_toggle.setChecked(bool(data.get("details_open")))
             with QSignalBlocker(self.queue_filter), QSignalBlocker(self.queue_search):
-                index = self.queue_filter.findData(data.get("queue_filter", "all"))
+                index = self.queue_filter.findData("all" if reset_filters else data.get("queue_filter", "all"))
                 self.queue_filter.setCurrentIndex(max(0, index))
-                self.queue_search.setText(str(data.get("queue_search", "")))
-            self._filter_pinned_path = active if data.get("filter_pinned") == active else None
+                self.queue_search.setText("" if reset_filters else str(data.get("queue_search", "")))
+            self._filter_pinned_path = active if not reset_filters and data.get("filter_pinned") == active else None
             self._apply_queue_filter(preserve_active=False, reset_pin=False)
             if recovered or form:
                 self._session_notice += "前回の下書きを復元しました。 "
@@ -397,7 +397,7 @@ class MainWindow(QMainWindow):
         filter_row = QHBoxLayout()
         self.queue_filter = QComboBox()
         self.queue_filter.setAccessibleName("画像一覧の状態で絞り込み")
-        for label, state in (("すべて", "all"), ("未読取", "pending"), ("要確認", "ready"),
+        for label, state in (("すべて", "all"), ("未読取", "pending"), ("確認待ち", "ready"),
                              ("読取失敗", "failed"), ("記録済み", "saved")):
             self.queue_filter.addItem(label, state)
         self.queue_search = field("画像一覧を検索", "店舗名・ファイル名で検索")
@@ -636,6 +636,15 @@ class MainWindow(QMainWindow):
         server_form.addRow("接続先 URL", self.url_edit)
         server_form.addRow("認証トークン", self.token_edit)
         server_form.addRow("モデル", self.model_box)
+        self.concurrency_box = QComboBox()
+        self.concurrency_box.addItem("1件（順番に解析）", 1)
+        self.concurrency_box.addItem("2件（並列に解析）", 2)
+        self.concurrency_box.setCurrentIndex(self.concurrency_box.findData(self.settings.concurrent_reads))
+        self.concurrency_box.currentIndexChanged.connect(self._save_concurrency)
+        server_form.addRow("同時解析数", self.concurrency_box)
+        parallel_hint = QLabel("変更は自動保存され、次の読み取りから適用されます。2件ではGPUメモリの使用量が増えます。速度はサーバーの設定やモデルによって異なります。")
+        parallel_hint.setWordWrap(True)
+        server_form.addRow("", parallel_hint)
         connect_btn = QPushButton("接続テスト・モデル取得")
         connect_btn.clicked.connect(self._test_connection)
         server_form.addRow("", connect_btn)
@@ -1299,7 +1308,8 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentIndex(2)
             return
         worker = BatchReadWorker(paths, client, model, self,
-                                 source_paths={path: self._resolve_image_path(path) for path in paths})
+                                 source_paths={path: self._resolve_image_path(path) for path in paths},
+                                 concurrency=self.settings.concurrent_reads)
         worker._connection_to_save = (normalize_base_url(self.url_edit.text()), model, self.token_edit.text().strip())
         self.batch_worker = worker
         self.pending_reads = set(paths)
@@ -1324,7 +1334,8 @@ class MainWindow(QMainWindow):
         entry.checked = False
         self._refresh_queue_item(path)
         self._update_read_controls()
-        self.batch_status.setText(f"{index} / {total} 枚目を読み取り中: {Path(path).name}")
+        if not self.batch_worker or not self.batch_worker.isInterruptionRequested():
+            self.batch_status.setText(f"読み取り開始 {index} / {total} 枚: {Path(path).name}（同時解析: 最大 {self.batch_worker.concurrency if self.batch_worker else 1} 件）")
 
     def _batch_image_succeeded(self, path, result):
         self.pending_reads.discard(path)
@@ -1374,7 +1385,7 @@ class MainWindow(QMainWindow):
         if self.batch_worker is not None:
             self.batch_worker.requestInterruption()
             self.stop_btn.setEnabled(False)
-            self.batch_status.setText("停止を予約しました。現在の1枚の応答または通信タイムアウトを待って停止します。")
+            self.batch_status.setText("停止を予約しました。送信済みの画像の応答または通信タイムアウトを待って停止します。")
 
     def _batch_finished(self):
         worker = self.batch_worker
@@ -1468,13 +1479,29 @@ class MainWindow(QMainWindow):
         message += f"\nうち消費税額（入力済み分）: {sum(known_taxes):,} 円"
         if len(known_taxes) < len(prepared):
             message += f"\n消費税額が未記入: {len(prepared) - len(known_taxes)} 枚"
+            missing_tax = [f"・{Path(entry.path).name}（{receipt.merchant} / {receipt.purchased_on:%Y/%m/%d}）"
+                           for entry, receipt in prepared if receipt.tax is None]
+            message += "\n" + "\n".join(missing_tax[:10])
+            if len(missing_tax) > 10:
+                message += f"\nほか {len(missing_tax) - 10} 枚（詳細を表示で全件確認できます）"
         if warnings:
             message += "\n\n確認事項:\n" + "\n".join(warnings[:10])
             if len(warnings) > 10:
                 message += f"\nほか {len(warnings) - 10} 件"
-        answer = QMessageBox.question(self, "まとめてExcelに記録", message,
-                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                      QMessageBox.StandardButton.No)
+        if len(prepared) - len(known_taxes) > 10:
+            dialog = QMessageBox(self)
+            dialog.setWindowTitle("まとめてExcelに記録")
+            dialog.setIcon(QMessageBox.Icon.Question)
+            dialog.setTextFormat(Qt.TextFormat.PlainText)
+            dialog.setText(message)
+            dialog.setDetailedText("消費税額が未記入の画像（全件）\n" + "\n".join(missing_tax))
+            dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            dialog.setDefaultButton(QMessageBox.StandardButton.No)
+            answer = dialog.exec()
+        else:
+            answer = QMessageBox.question(self, "まとめてExcelに記録", message,
+                                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                          QMessageBox.StandardButton.No)
         if answer != QMessageBox.StandardButton.Yes:
             return
         try:
@@ -1905,6 +1932,8 @@ class MainWindow(QMainWindow):
                 self.backup_limit_spin.setValue(self.settings.backup_generations)
                 self.keep_check.setChecked(self.settings.keep_images)
                 self.url_edit.setText(self.settings.server_url)
+                with QSignalBlocker(self.concurrency_box):
+                    self.concurrency_box.setCurrentIndex(self.concurrency_box.findData(self.settings.concurrent_reads))
                 with QSignalBlocker(self.model_box):
                     self.model_box.clear()
                     self.model_box.addItems(self.settings.model_choices)
@@ -2000,6 +2029,18 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, "モデルを保存できません", str(exc))
 
+    def _save_concurrency(self, *_):
+        previous = self.settings.concurrent_reads
+        try:
+            candidate = replace(self.settings, concurrent_reads=self.concurrency_box.currentData())
+            candidate.save()
+            self.settings = candidate
+            self.statusBar().showMessage("同時解析数を保存しました。次の読み取りから適用します。", 5000)
+        except Exception as exc:
+            with QSignalBlocker(self.concurrency_box):
+                self.concurrency_box.setCurrentIndex(self.concurrency_box.findData(previous))
+            QMessageBox.warning(self, "同時解析数を保存できません", str(exc))
+
     def _save_settings(self):
         if self.workers:
             return
@@ -2039,7 +2080,7 @@ class MainWindow(QMainWindow):
             if self.batch_worker:
                 self._close_after_batch = True
                 self._stop_batch()
-                self.batch_status.setText("下書きを保存しました。現在の1枚の処理が終わったら終了します。")
+                self.batch_status.setText("下書きを保存しました。送信済みの画像の処理がすべて終わったら終了します。")
             else:
                 QMessageBox.information(self, "処理中", "処理の完了を待ってください。")
             event.ignore()

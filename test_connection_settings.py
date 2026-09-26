@@ -57,6 +57,25 @@ class ConnectionSettingsTests(unittest.TestCase):
         self.window.close()
         self.window = MainWindow()
 
+    def test_concurrency_saved_without_changing_unfinished_server_edits(self):
+        self.window.url_edit.setText("unfinished-url")
+        self.window.concurrency_box.setCurrentIndex(self.window.concurrency_box.findData(2))
+        self.assertEqual(Settings.load().concurrent_reads, 2)
+        self.assertEqual(Settings.load().server_url, "http://localhost:1234/v1")
+        self.reopen()
+        self.assertEqual(self.window.concurrency_box.currentData(), 2)
+        with patch("config.Settings.save", side_effect=OSError("disk error")):
+            self.window.concurrency_box.setCurrentIndex(0)
+        self.assertEqual(self.window.concurrency_box.currentData(), 2)
+        self.assertEqual(self.window.settings.concurrent_reads, 2)
+
+    def test_old_and_invalid_concurrency_settings_default_to_one(self):
+        for value in (None, True, 0, 3, "2", [], {}):
+            (self.root / "settings.json").write_text(json.dumps({"concurrent_reads": value}), encoding="utf-8")
+            self.assertEqual(Settings.load().concurrent_reads, 1)
+        (self.root / "settings.json").write_text('{}', encoding="utf-8")
+        self.assertEqual(Settings.load().concurrent_reads, 1)
+
     def test_connection_success_restores_url_token_models_without_save_button(self):
         self.window.url_edit.setText("http://127.0.0.1:2345/")
         self.window.token_edit.setText("new-test-token")

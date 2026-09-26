@@ -134,7 +134,7 @@ class QueueFilterTests(unittest.TestCase):
         self.assertFalse(self.window.entries[self.paths[0]].checked)
         self.assertTrue(self.window.entries[self.paths[1]].checked)
 
-    def test_filter_search_hidden_checks_and_editor_restore(self):
+    def test_startup_shows_all_but_retains_checks_and_editor(self):
         self.window.queue.setCurrentRow(0)
         self.filter("ready")
         self.window.check_visible_btn.click()
@@ -143,12 +143,12 @@ class QueueFilterTests(unittest.TestCase):
         self.window.queue_search.setText("薬局")
         self.window.close()
         self.window = MainWindow()
-        self.assertEqual(self.window.queue_filter.currentData(), "ready")
-        self.assertEqual(self.window.queue_search.text(), "薬局")
-        self.assertEqual(self.visible(), [self.paths[1]])
+        self.assertEqual(self.window.queue_filter.currentData(), "all")
+        self.assertEqual(self.window.queue_search.text(), "")
+        self.assertEqual(self.visible(), self.paths)
         self.assertTrue(self.window.entries[self.paths[0]].checked)
         self.assertEqual(self.window.memo_edit.text(), "再開する編集")
-        self.assertIn("非表示 1 件", self.window.review_count_label.text())
+        self.assertNotIn("非表示 1 件", self.window.review_count_label.text())
 
     def test_hidden_checked_receipts_record_once_with_confirmation(self):
         self.filter("ready")
@@ -204,7 +204,7 @@ class QueueFilterTests(unittest.TestCase):
         self.window.close()
         self.window = MainWindow()
         self.assertEqual(list(self.window.entries), self.paths[2:])
-        self.assertEqual(self.window.queue_search.text(), "薬局")
+        self.assertEqual(self.window.queue_search.text(), "")
         self.assertEqual(self.window.merchant_edit.text(), "")
         self.window.queue_search.clear()
         self.filter("all")
