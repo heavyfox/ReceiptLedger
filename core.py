@@ -319,6 +319,15 @@ def _build_monthly_summary(ws, receipts):
             chart.series[0].graphicalProperties.solidFill = BLUE
             chart.series[0].graphicalProperties.line.noFill = True
             chart.y_axis.numFmt = '#,##0"円"'
+            # Excel requires explicit visible axes; other preview engines can
+            # display labels even when these settings are omitted.
+            chart.x_axis.delete = False
+            chart.y_axis.delete = False
+            chart.x_axis.axPos = "b"
+            chart.y_axis.axPos = "l"
+            chart.y_axis.tickLblPos = "nextTo"
+            chart.x_axis.crosses = "autoZero"
+            chart.y_axis.crosses = "autoZero"
             chart.x_axis.tickLblPos = "low"
             chart.x_axis.tickLblSkip = 1
             chart.x_axis.txPr = RichText(p=[Paragraph(pPr=ParagraphProperties(defRPr=CharacterProperties(sz=1200, b=True)))])
