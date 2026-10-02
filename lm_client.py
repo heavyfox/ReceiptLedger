@@ -10,15 +10,21 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+from time import perf_counter
+from uuid import uuid4
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from image_io import model_jpeg_data_url
+import diagnostics
 
 
 class LMStudioError(Exception):
-    pass
+    def __init__(self, message, *, code="unknown", http_status=None):
+        super().__init__(message)
+        self.code = code
+        self.http_status = http_status
 
 
 @dataclass
@@ -80,7 +86,7 @@ def _image_data_url(path: str | Path) -> str:
     try:
         return model_jpeg_data_url(path)
     except Exception as exc:
-        raise LMStudioError(f"画像を開けません: {exc}") from exc
+        raise LMStudioError(f"画像を開けません: {exc}", code="image_decode") from exc
 
 
 RECEIPT_SCHEMA = {
@@ -223,6 +229,22 @@ class LMStudioClient:
         self.timeout = timeout
 
     def _request(self, method: str, path: str, body: dict | None = None) -> dict:
+        started = perf_counter()
+        error = "none"
+        status = None
+        try:
+            return self._send_request(method, path, body)
+        except Exception as exc:
+            error = diagnostics.error_code(exc)
+            status = getattr(exc, "http_status", None)
+            raise
+        finally:
+            diagnostics.record("request_finished", endpoint="models" if path == "/models" else "extract",
+                               error=error, outcome="success" if error == "none" else "failed",
+                               http_status=status,
+                               elapsed_ms=int((perf_counter() - started) * 1000))
+
+    def _send_request(self, method: str, path: str, body: dict | None = None) -> dict:
         headers = {"Accept": "application/json"}
         payload = None
         if body is not None:
@@ -233,28 +255,47 @@ class LMStudioClient:
         request = urllib.request.Request(self.base_url + path, data=payload, headers=headers, method=method)
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, request, fp, code, msg, response_headers, newurl):
-                raise LMStudioError("サーバーが別の接続先への転送を要求しました。通信を中止しました。")
+                raise LMStudioError("サーバーが別の接続先への転送を要求しました。通信を中止しました。", code="redirect")
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
         try:
             with opener.open(request, timeout=self.timeout) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
-                raise LMStudioError("認証に失敗しました。LM Studio のトークンを確認してください。") from exc
+                raise LMStudioError("認証に失敗しました。LM Studio のトークンを確認してください。", code="auth", http_status=exc.code) from exc
             detail = exc.read(400).decode("utf-8", errors="replace")
-            raise LMStudioError(f"LM Studio がエラーを返しました (HTTP {exc.code}): {detail}") from exc
+            raise LMStudioError(f"LM Studio がエラーを返しました (HTTP {exc.code}): {detail}", code="http_error", http_status=exc.code) from exc
         except (urllib.error.URLError, socket.timeout, TimeoutError) as exc:
-            raise LMStudioError(f"LM Studio に接続できません。サーバー・LAN・ポートを確認してください: {exc}") from exc
+            reason = getattr(exc, "reason", exc)
+            code = "timeout" if isinstance(reason, (socket.timeout, TimeoutError)) else "network"
+            raise LMStudioError(f"LM Studio に接続できません。サーバー・LAN・ポートを確認してください: {exc}", code=code) from exc
         except json.JSONDecodeError as exc:
-            raise LMStudioError("LM Studio から JSON 形式の応答を受け取れませんでした。") from exc
+            raise LMStudioError("LM Studio から JSON 形式の応答を受け取れませんでした。", code="invalid_response") from exc
 
     def models(self) -> list[str]:
         data = self._request("GET", "/models")
         return sorted(str(item["id"]) for item in data.get("data", []) if item.get("id"))
 
     def extract(self, image_path: str | Path, model: str) -> ExtractedReceipt:
+        started = perf_counter()
+        job = uuid4().hex
+        extension = Path(image_path).suffix.lower()
+        image_format = extension if extension in diagnostics.FORMATS else "other"
+        diagnostics.record("extract_started", job=job, format=image_format)
+        error = "none"
+        try:
+            return self._extract(image_path, model)
+        except Exception as exc:
+            error = diagnostics.error_code(exc)
+            raise
+        finally:
+            diagnostics.record("extract_finished", job=job, format=image_format,
+                               error=error, outcome="success" if error == "none" else "failed",
+                               elapsed_ms=int((perf_counter() - started) * 1000))
+
+    def _extract(self, image_path: str | Path, model: str) -> ExtractedReceipt:
         if not model.strip():
-            raise LMStudioError("モデルを選択してください。")
+            raise LMStudioError("モデルを選択してください。", code="missing_model")
         body = {
             "model": model.strip(),
             "messages": [
@@ -280,10 +321,12 @@ class LMStudioClient:
                 if reason == "length":
                     raise ValueError("モデルの出力が上限に達し、途中で終了しました")
                 if reason in ("content_filter", "tool_calls") or choice["message"].get("refusal"):
-                    raise LMStudioError("モデルが読み取り結果を返しませんでした。画像入力に対応したモデルを確認してください。")
+                    raise LMStudioError("モデルが読み取り結果を返しませんでした。画像入力に対応したモデルを確認してください。", code="refusal")
                 return _parse_receipt(_receipt_json(choice["message"].get("content")))
             except (KeyError, IndexError, TypeError, ValueError) as exc:
                 if attempt == 0:
+                    diagnostics.record("extract_retry", attempt=2,
+                                       error="output_limit" if reason == "length" else "invalid_receipt")
                     body["max_tokens"] = 6000
                     body["messages"][1]["content"][0]["text"] = (
                         "このレシートを再確認し、指定されたJSONだけを完成させて返してください。"
@@ -292,5 +335,6 @@ class LMStudioClient:
                 detail = "JSONが途中で切れているか、形式が不正です" if isinstance(exc, json.JSONDecodeError) else str(exc)
                 raise LMStudioError(
                     f"読み取り結果を解釈できませんでした（自動再試行済み）。\n原因: {detail}\n"
-                    f"終了理由: {reason}\nLM StudioでThinkingをオフにし、画像入力・JSON出力に対応したモデルで再試行してください。"
+                    f"終了理由: {reason}\nLM StudioでThinkingをオフにし、画像入力・JSON出力に対応したモデルで再試行してください。",
+                    code="output_limit" if reason == "length" else "invalid_receipt",
                 ) from exc

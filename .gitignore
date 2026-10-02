@@ -7,6 +7,8 @@ release/
 /data/
 qa/
 *.log
+/logs/
+diagnostics.jsonl*
 settings.json
 draft-session*.json
 *.xlsx

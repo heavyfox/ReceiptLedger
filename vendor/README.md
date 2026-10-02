@@ -7,6 +7,6 @@
 - x265 / x264 encoders and the MinGW runtime are not present.
 - Source archives and their hashes: `../THIRD_PARTY_SOURCES.json`.
 - Rebuild instructions and modifications: `../tools/build_heif.py` and `../docs/BUILD.md`.
-- Corresponding sources are provided in the release's `ReceiptLedger-v1.4.2-third-party-sources.zip`.
+- Corresponding sources are provided in the release's `ReceiptLedger-v1.5.1-third-party-sources.zip`.
 
 Verify the wheel using `SHA256SUMS.txt` before use. If rebuilding or modifying the wheel, update that checksum file for your build. Runtime library replacement is permitted.

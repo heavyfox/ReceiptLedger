@@ -20,12 +20,16 @@ if __name__ == "__main__":
         from image_io import Image, model_jpeg_data_url, preview_png
         from data_backup import create_bundle, restore_bundle
         from version import APP_VERSION
+        import diagnostics
 
         with tempfile.TemporaryDirectory() as folder, patch("app.get_token", return_value=""), patch("app.save_token"):
             os.environ["RECEIPT_LEDGER_DATA_DIR"] = folder
             Settings(workbook_path=str(Path(folder) / "test.xlsx")).save()
             app = QApplication([])
             window = MainWindow()
+            assert window.copy_diagnostics_btn.text() == "診断情報をコピー"
+            diagnostics.record("request_finished", endpoint="models", error="timeout", elapsed_ms=42)
+            assert '"elapsed_ms": 42' in diagnostics.report()
             window.theme_selector.setCurrentIndex(window.theme_selector.findData("dark"))
             assert Settings.load().theme == "dark"
             window.theme_selector.setCurrentIndex(window.theme_selector.findData("system"))
@@ -50,6 +54,27 @@ if __name__ == "__main__":
             shutil.copyfile(heic, heif)
             assert preview_png(heif).startswith(b"\x89PNG")
             assert not window.windowIcon().isNull()
+            unread = str((Path(folder) / "unread.png").resolve())
+            failed = str((Path(folder) / "failed.png").resolve())
+            for path in (unread, failed):
+                Image.new("RGB", (320, 640), "white").save(path)
+            window._enqueue_images([unread, failed])
+            window.entries[failed].state = "failed"
+            window.entries[failed].error = "自己テストの読み取り失敗"
+            window._refresh_queue_item(failed)
+            window.check_visible_btn.click()
+            assert all(window.entries[path].checked for path in (unread, failed))
+            assert not window.batch_save_btn.isEnabled()
+            with patch("app.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+                window.remove_checked_btn.click()
+            assert not window.entries
+            assert all(Path(path).is_file() for path in (unread, failed))
+            window.undo_remove_btn.click()
+            assert window.entries[unread].state == "pending"
+            assert window.entries[failed].state == "failed"
+            assert all(window.entries[path].checked for path in (unread, failed))
+            with patch("app.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+                window.remove_checked_btn.click()
             class TestClient:
                 def extract(self, image_path, model):
                     return _parse_receipt({"receipt_date": date.today().isoformat(),

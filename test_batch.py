@@ -283,7 +283,7 @@ class BatchTests(unittest.TestCase):
         self.window.queue.item(0).setCheckState(Qt.CheckState.Checked)
         self.assertTrue(self.window.entries[paths[0]].checked)
         self.assertFalse(self.window.entries[paths[0]].reviewed)
-        self.assertFalse(self.window.queue.item(2).flags() & Qt.ItemFlag.ItemIsUserCheckable)
+        self.assertTrue(self.window.queue.item(2).flags() & Qt.ItemFlag.ItemIsUserCheckable)
         with patch("app.QMessageBox.question", return_value=QMessageBox.StandardButton.No), patch.object(self.window.ledger, "save") as save:
             self.window.batch_save_btn.click()
             save.assert_not_called()
@@ -373,8 +373,9 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(saved["entries"][0]["draft"]["memo"], "終了前の修正")
 
     def test_large_checkbox_mouse_and_keyboard_in_both_themes(self):
-        paths = self.add_images(["ready.png", "pending.png"])
+        paths = self.add_images(["ready.png", "pending.png", "failed.png"])
         self.window._batch_image_succeeded(paths[0], result_for(paths[0]))
+        self.window._batch_image_failed(paths[2], "自己テストの失敗")
         self.window.show()
         self.application.processEvents()
         for theme in ("light", "dark"):
@@ -392,10 +393,15 @@ class BatchTests(unittest.TestCase):
             self.window.queue.setCurrentRow(0)
             QTest.keyClick(self.window.queue, Qt.Key.Key_Space)
             self.assertFalse(self.window.entries[paths[0]].checked)
-            option.rect = self.window.queue.visualItemRect(self.window.queue.item(1))
-            QTest.mouseClick(self.window.queue.viewport(), Qt.MouseButton.LeftButton,
-                             pos=self.window.queue_delegate.indicator_rect(option).center())
-            self.assertFalse(self.window.entries[paths[1]].checked)
+            for index in (1, 2):
+                option.rect = self.window.queue.visualItemRect(self.window.queue.item(index))
+                QTest.mouseClick(self.window.queue.viewport(), Qt.MouseButton.LeftButton,
+                                 pos=self.window.queue_delegate.indicator_rect(option).center())
+                self.assertTrue(self.window.entries[paths[index]].checked)
+                self.assertFalse(self.window.entries[paths[index]].reviewed)
+                self.window.queue.setCurrentRow(index)
+                QTest.keyClick(self.window.queue, Qt.Key.Key_Space)
+                self.assertFalse(self.window.entries[paths[index]].checked)
 
     def test_theme_persists_and_keeps_unsaved_form(self):
         self.window.merchant_edit.setText("編集中の店舗")

@@ -10,6 +10,10 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
+from time import perf_counter
+
+import diagnostics
+from excel_validation import validate_export
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, Reference
@@ -561,6 +565,18 @@ class ExcelLedger:
             raise LedgerError(f"Excel ファイルを読み込めません: {exc}") from exc
 
     def save(self, receipts: list[Receipt]) -> Path | None:
+        started = perf_counter()
+        try:
+            result = self._save(receipts)
+        except Exception as exc:
+            diagnostics.record("excel_failed", count=len(receipts), error=diagnostics.error_code(exc),
+                               elapsed_ms=int((perf_counter() - started) * 1000))
+            raise
+        diagnostics.record("excel_saved", count=len(receipts),
+                           elapsed_ms=int((perf_counter() - started) * 1000))
+        return result
+
+    def _save(self, receipts: list[Receipt]) -> Path | None:
         if _fingerprint(self.path) != self.fingerprint:
             raise WorkbookChanged("Excel ファイルが外部で変更されました。再読み込みしてください。")
         if len({r.receipt_id for r in receipts}) != len(receipts):
@@ -658,6 +674,7 @@ class ExcelLedger:
             os.close(fd)
             temp_path = Path(name)
             book.save(temp_path)
+            validate_export(temp_path, receipts, CATEGORIES)
             if self.path.exists():
                 stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
                 backup = self.path.with_name(f"{self.path.stem}.backup-{stamp}.xlsx")

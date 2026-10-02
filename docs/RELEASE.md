@@ -14,11 +14,11 @@
 
 ## Releases
 
-バージョン `v1.4.2` のソースにタグを付け、次のファイルを同じReleaseへ添付します。
+バージョン `v1.5.1` のソースにタグを付け、次のファイルを同じReleaseへ添付します。
 
-1. `ReceiptLedger-v1.4.2-windows-x64.zip` — 利用者向け。
-2. `ReceiptLedger-v1.4.2-source.zip` — この版のアプリソース。
-3. `ReceiptLedger-v1.4.2-third-party-sources.zip` — LGPLライブラリの対応ソースとHEIC再ビルド手順。
+1. `ReceiptLedger-v1.5.1-windows-x64.zip` — 利用者向け。
+2. `ReceiptLedger-v1.5.1-source.zip` — この版のアプリソース。
+3. `ReceiptLedger-v1.5.1-third-party-sources.zip` — LGPLライブラリの対応ソースとHEIC再ビルド手順。
 4. `SHA256SUMS.txt` — 上記3ファイルのSHA-256。
 
 **対応ソースZIPはWindows版と一緒に提供します。** 依存ライブラリの公式サイトへのリンクだけで代用せず、同じダウンロード場所から無償で取得できる状態にしてください。

@@ -9,28 +9,30 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, Qt, QThread, Signal, QSignalBlocker, QTimer, QLockFile
-from PySide6.QtGui import QAction, QPixmap, QIcon
+from PySide6.QtGui import QPixmap, QIcon
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QGroupBox,
-    QHBoxLayout, QGridLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QMainWindow,
-    QMessageBox, QMenu, QPushButton, QProgressBar, QScrollArea, QSplitter, QStatusBar, QTabWidget,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QSpinBox,
+    QApplication, QComboBox, QDialog, QFileDialog, QGroupBox,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
+    QMessageBox, QPushButton, QStatusBar, QTabWidget,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from config import Settings, app_data_dir, application_dir, default_data_dir, get_token, save_token
+from config import Settings, app_data_dir, default_data_dir, get_token, save_token
 from data_backup import create_bundle, restore_bundle, activate_restored_state, recover_activation
 from storage import copy_image, copy_workbook_rebased, writable_directory, file_usage, folder_files, regular_backups, prune_backups, size_text
 from version import APP_VERSION
 from core import (
-    CATEGORIES, ExcelLedger, LedgerError, Receipt, WorkbookChanged,
+    ExcelLedger, LedgerError, Receipt, WorkbookChanged,
     discrepancy, duplicate_candidates, validate_receipt,
 )
 from batch import BatchReadWorker, QueueEntry, ReceiptDraft
-from appearance import apply_theme, ReceiptCheckDelegate, system_theme
+from appearance import apply_theme, system_theme
 from lm_client import LMStudioClient, LMStudioError, ExtractedReceipt, normalize_base_url
 from image_io import preview_png, supported_image
-from image_viewer import ImageViewer
 from session_store import SessionStore, receipt_signature
+import receipt_panel
+import settings_panel
+import diagnostics
 
 
 class TaskWorker(QThread):
@@ -45,6 +47,7 @@ class TaskWorker(QThread):
         try:
             self.result.emit(self.task())
         except Exception as exc:
+            diagnostics.record("task_failed", error=diagnostics.error_code(exc))
             self.failed.emit(str(exc))
 
 
@@ -113,6 +116,7 @@ class MainWindow(QMainWindow):
         self._session_write_blocked = False
         self._data_busy = False
         self._setup_ui()
+        diagnostics.record("app_started")
         self.theme_timer = QTimer(self)
         self.theme_timer.setInterval(2000)
         self.theme_timer.timeout.connect(self._sync_system_theme)
@@ -171,9 +175,14 @@ class MainWindow(QMainWindow):
             return True
         try:
             self.session_store.save(self._session_snapshot())
+            self._session_log_error = None
             self.autosave_label.setText(self._session_notice + "下書き保存済み・Excelへの保存は記録ボタンから")
             return True
         except (OSError, ValueError, TypeError) as exc:
+            code = diagnostics.error_code(exc)
+            if getattr(self, "_session_log_error", None) != code:
+                diagnostics.record("session_failed", error=code)
+                self._session_log_error = code
             self.autosave_label.setText(f"下書きを保存できません: {exc}")
             return False
 
@@ -346,199 +355,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "表示設定を保存できませんでした", str(exc))
 
     def _receipt_tab(self) -> QWidget:
-        root = QWidget()
-        layout = QVBoxLayout(root)
-        top = QHBoxLayout()
-        self.add_images_btn = QPushButton("画像を追加")
-        self.add_images_btn.clicked.connect(self._add_images)
-        self.read_btn = QPushButton("選択中を読み取る")
-        self.read_btn.setObjectName("primary")
-        self.read_btn.clicked.connect(self._read_image)
-        self.new_btn = QPushButton("新規入力")
-        self.new_btn.clicked.connect(lambda: self._new_form())
-        self.batch_read_btn = QPushButton("未読を一括読み込み")
-        self.batch_read_btn.setToolTip("一覧の絞り込みに関係なく、すべての未読画像を読み取ります。")
-        self.batch_read_btn.clicked.connect(self._read_batch)
-        self.retry_btn = QPushButton("失敗分を再試行")
-        self.retry_btn.setToolTip("一覧の絞り込みに関係なく、すべての読取失敗画像を再試行します。")
-        self.retry_btn.clicked.connect(self._retry_failed)
-        self.stop_btn = QPushButton("停止")
-        self.stop_btn.setEnabled(False)
-        self.stop_btn.clicked.connect(self._stop_batch)
-        top.addWidget(self.add_images_btn)
-        top.addWidget(self.read_btn)
-        top.addWidget(self.batch_read_btn)
-        top.addWidget(self.retry_btn)
-        top.addWidget(self.stop_btn)
-        top.addWidget(self.new_btn)
-        top.addStretch()
-        layout.addLayout(top)
-        progress_row = QHBoxLayout()
-        self.batch_progress = QProgressBar()
-        self.batch_progress.setRange(0, 1)
-        self.batch_progress.setValue(0)
-        self.batch_progress.setMaximumWidth(240)
-        self.batch_status = QLabel("複数画像を追加して、一括読み込みを開始できます。")
-        self.batch_status.setWordWrap(True)
-        self.batch_status.setTextFormat(Qt.TextFormat.PlainText)
-        progress_row.addWidget(self.batch_progress)
-        progress_row.addWidget(self.batch_status, 1)
-        layout.addLayout(progress_row)
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        self.queue = QListWidget()
-        self.queue_delegate = ReceiptCheckDelegate(self.queue)
-        self.queue.setItemDelegate(self.queue_delegate)
-        self.queue.setMaximumHeight(180)
-        self.queue.currentRowChanged.connect(self._select_queue_image)
-        self.queue.itemChanged.connect(self._queue_item_changed)
-        left_layout.addWidget(QLabel("取り込んだ画像（記録・一覧から削除する画像にチェック）"))
-        filter_row = QHBoxLayout()
-        self.queue_filter = QComboBox()
-        self.queue_filter.setAccessibleName("画像一覧の状態で絞り込み")
-        for label, state in (("すべて", "all"), ("未読取", "pending"), ("確認待ち", "ready"),
-                             ("読取失敗", "failed"), ("記録済み", "saved")):
-            self.queue_filter.addItem(label, state)
-        self.queue_search = field("画像一覧を検索", "店舗名・ファイル名で検索")
-        self.queue_search.setClearButtonEnabled(True)
-        self.queue_filter.currentIndexChanged.connect(self._queue_filter_changed)
-        self.queue_search.textChanged.connect(self._queue_filter_changed)
-        filter_row.addWidget(self.queue_filter)
-        filter_row.addWidget(self.queue_search, 1)
-        left_layout.addLayout(filter_row)
-        selection_row = QHBoxLayout()
-        self.check_visible_btn = QPushButton("表示中をすべてチェック")
-        self.check_visible_btn.setToolTip("表示中の読み取り済み・記録済み画像をチェックします。記録済み画像は一覧からの削除用に選択できます。")
-        self.check_visible_btn.clicked.connect(self._check_visible)
-        self.clear_checks_btn = QPushButton("チェックをすべて解除")
-        self.clear_checks_btn.setToolTip("非表示のレシートも含めてチェックを解除します。")
-        self.clear_checks_btn.clicked.connect(self._clear_checks)
-        selection_row.addWidget(self.check_visible_btn)
-        selection_row.addWidget(self.clear_checks_btn)
-        self.remove_images_btn = QPushButton("一覧から削除…")
-        self.remove_images_btn.setToolTip("画像一覧と下書きから削除します。元画像・Excelの記録は残ります。読み取り・接続処理中は利用できません。")
-        remove_menu = QMenu(self.remove_images_btn)
-        self.remove_image_actions = {}
-        for scope in ("current", "checked", "visible"):
-            action = remove_menu.addAction("")
-            action.triggered.connect(lambda _checked=False, scope=scope: self._remove_images(scope))
-            self.remove_image_actions[scope] = action
-        self.remove_images_btn.setMenu(remove_menu)
-        selection_row.addWidget(self.remove_images_btn)
-        selection_row.addStretch()
-        left_layout.addLayout(selection_row)
-        left_layout.addWidget(self.queue)
-        self.review_count_label = QLabel("選択 0 件（未記録 0 件・記録済み 0 件）")
-        self.review_count_label.setWordWrap(True)
-        left_layout.addWidget(self.review_count_label)
-        removal_row = QHBoxLayout()
-        self.remove_checked_btn = QPushButton("選択 0 件を一覧から削除")
-        self.remove_checked_btn.clicked.connect(lambda: self._remove_images("checked"))
-        self.undo_remove_btn = QPushButton("削除を元に戻す")
-        self.undo_remove_btn.setToolTip("直近10回の一覧からの削除を、新しい順に戻せます。再起動後も利用できます。")
-        self.undo_remove_btn.clicked.connect(self._undo_remove_images)
-        removal_row.addWidget(self.remove_checked_btn)
-        removal_row.addWidget(self.undo_remove_btn)
-        removal_row.addStretch()
-        left_layout.addLayout(removal_row)
-        self.queue_filter_notice = QLabel()
-        self.queue_filter_notice.setTextFormat(Qt.TextFormat.PlainText)
-        self.queue_filter_notice.setWordWrap(True)
-        self.queue_filter_notice.hide()
-        left_layout.addWidget(self.queue_filter_notice)
-        self.batch_save_btn = QPushButton("未記録 0 件をExcelに記録")
-        self.batch_save_btn.setObjectName("primary")
-        self.batch_save_btn.clicked.connect(self._save_batch)
-        self.preview = ImageViewer()
-        left_layout.addWidget(self.preview, 1)
-        splitter.addWidget(left)
-
-        right = QWidget()
-        self.receipt_editor = right
-        right_layout = QVBoxLayout(right)
-        info = QGroupBox("レシート情報")
-        form = QGridLayout(info)
-        self.date_edit = field("購入日", "YYYY-MM-DD")
-        self.merchant_edit = field("店舗名")
-        self.amount_edit = field("合計金額（税込）", "税込の支払合計、円の整数")
-        self.tax_edit = field("うち消費税額", "不明なら空欄、0円なら0")
-        self.tax_edit.setToolTip("税込合計に含まれる消費税額です。合計に再加算しません。")
-        self.discount_edit = field("値引き額", "任意")
-        self.category_box = QComboBox()
-        self.category_box.addItems(CATEGORIES)
-        self.payment_edit = field("支払方法")
-        self.memo_edit = field("メモ")
-        form.addWidget(QLabel("購入日 *"), 0, 0)
-        form.addWidget(self.date_edit, 0, 1)
-        form.addWidget(QLabel("費目 *"), 0, 2)
-        form.addWidget(self.category_box, 0, 3)
-        form.addWidget(QLabel("店舗名 *"), 1, 0)
-        form.addWidget(self.merchant_edit, 1, 1, 1, 3)
-        form.addWidget(QLabel("税込合計 *"), 2, 0)
-        form.addWidget(self.amount_edit, 2, 1)
-        form.addWidget(QLabel("うち消費税"), 2, 2)
-        form.addWidget(self.tax_edit, 2, 3)
-        form.setColumnStretch(1, 1)
-        form.setColumnStretch(3, 1)
-        right_layout.addWidget(info)
-        self.details_toggle = QPushButton("その他の情報（支払方法・値引き・メモ）")
-        self.details_toggle.setCheckable(True)
-        self.details_fields = QWidget()
-        details_form = QFormLayout(self.details_fields)
-        for label, widget in (("支払方法", self.payment_edit), ("値引き額", self.discount_edit), ("メモ", self.memo_edit)):
-            details_form.addRow(label, widget)
-        self.details_fields.setVisible(False)
-        self.details_toggle.toggled.connect(self.details_fields.setVisible)
-        right_layout.addWidget(self.details_toggle)
-        right_layout.addWidget(self.details_fields)
-
-        item_group = QGroupBox("購入した商品（数量・単価・補足を確認）")
-        item_layout = QVBoxLayout(item_group)
-        self.item_table = QTableWidget(0, 5)
-        self.item_table.setHorizontalHeaderLabels(["品目", "数量", "単価（円）", "金額（円）", "詳細・補足"])
-        self.item_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.item_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        self.item_table.setMinimumHeight(170)
-        item_layout.addWidget(self.item_table)
-        item_hint = QLabel("金額が空欄なら数量 × 単価から計算します。規格・容量・税率などは「詳細・補足」に入力できます。")
-        item_hint.setWordWrap(True)
-        item_layout.addWidget(item_hint)
-        item_actions = QHBoxLayout()
-        add_item = QPushButton("行を追加")
-        add_item.clicked.connect(lambda: self.item_table.insertRow(self.item_table.rowCount()))
-        delete_item = QPushButton("選択行を削除")
-        delete_item.clicked.connect(self._delete_item_rows)
-        item_actions.addWidget(add_item)
-        item_actions.addWidget(delete_item)
-        item_actions.addStretch()
-        item_layout.addLayout(item_actions)
-        right_layout.addWidget(item_group, 1)
-        self.warning_label = QLabel("読み取り後、元画像と金額を確認して登録してください。")
-        self.warning_label.setWordWrap(True)
-        self.warning_label.setObjectName("receiptWarning")
-        right_layout.addWidget(self.warning_label)
-        self.receipt_save_target = QLabel()
-        self.receipt_save_target.setTextFormat(Qt.TextFormat.PlainText)
-        self.save_btn = QPushButton("この1件を記録")
-        self.save_btn.clicked.connect(self._save_receipt)
-        right_scroll = QScrollArea()
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setWidget(right)
-        splitter.addWidget(right_scroll)
-        splitter.setSizes([550, 680])
-        layout.addWidget(splitter, 1)
-        footer = QHBoxLayout()
-        footer_info = QVBoxLayout()
-        footer_info.addWidget(self.receipt_save_target)
-        self.autosave_label = QLabel("下書きを自動保存します")
-        self.autosave_label.setWordWrap(True)
-        footer_info.addWidget(self.autosave_label)
-        footer.addLayout(footer_info, 1)
-        footer.addWidget(self.save_btn)
-        footer.addWidget(self.batch_save_btn)
-        layout.addLayout(footer)
-        return root
+        return receipt_panel.build(self, field)
 
     def _ledger_tab(self) -> QWidget:
         root = QWidget()
@@ -612,140 +429,12 @@ class MainWindow(QMainWindow):
         return root
 
     def _settings_tab(self) -> QWidget:
-        root = QWidget()
-        layout = QVBoxLayout(root)
-        appearance_group = QGroupBox("画面表示")
-        appearance_form = QFormLayout(appearance_group)
-        self.theme_box = self._theme_selector()
-        appearance_form.addRow("表示モード（自動保存）", self.theme_box)
-        layout.addWidget(appearance_group)
-        server_group = QGroupBox("LM Studio サーバー")
-        server_form = QFormLayout(server_group)
-        self.url_edit = field("接続先", "http://192.168.1.10:1234/v1")
-        self.url_edit.setText(self.settings.server_url)
-        self.token_edit = field("認証トークン", "LM Studio で発行したトークン")
-        self.token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self._saved_server_token = get_token()
-        self.token_edit.setText(self._saved_server_token)
-        self.model_box = QComboBox()
-        self.model_box.setEditable(True)
-        self.model_box.addItems(self.settings.model_choices)
-        self.model_box.setCurrentText(self.settings.model)
-        self.model_box.activated.connect(self._save_model_selection)
-        self.model_box.lineEdit().editingFinished.connect(self._save_model_selection)
-        server_form.addRow("接続先 URL", self.url_edit)
-        server_form.addRow("認証トークン", self.token_edit)
-        server_form.addRow("モデル", self.model_box)
-        self.concurrency_box = QComboBox()
-        self.concurrency_box.addItem("1件（順番に解析）", 1)
-        self.concurrency_box.addItem("2件（並列に解析）", 2)
-        self.concurrency_box.setCurrentIndex(self.concurrency_box.findData(self.settings.concurrent_reads))
-        self.concurrency_box.currentIndexChanged.connect(self._save_concurrency)
-        server_form.addRow("同時解析数", self.concurrency_box)
-        parallel_hint = QLabel("変更は自動保存され、次の読み取りから適用されます。2件ではGPUメモリの使用量が増えます。速度はサーバーの設定やモデルによって異なります。")
-        parallel_hint.setWordWrap(True)
-        server_form.addRow("", parallel_hint)
-        connect_btn = QPushButton("接続テスト・モデル取得")
-        connect_btn.clicked.connect(self._test_connection)
-        server_form.addRow("", connect_btn)
-        server_hint = QLabel("接続成功時にURL・認証情報・モデル一覧を自動保存します。接続後のモデル選択も保存し、次回起動時に復元します。")
-        server_hint.setWordWrap(True)
-        server_form.addRow("", server_hint)
-        layout.addWidget(server_group)
-        storage_group = QGroupBox("保存")
-        storage_form = QFormLayout(storage_group)
-        self.workbook_edit = field("Excel 保存先")
-        self.workbook_edit.setText(self.settings.workbook_path)
-        browse = QPushButton("選択")
-        browse.clicked.connect(self._choose_workbook)
-        path_row = QWidget()
-        path_layout = QHBoxLayout(path_row)
-        path_layout.setContentsMargins(0, 0, 0, 0)
-        path_layout.addWidget(self.workbook_edit, 1)
-        path_layout.addWidget(browse)
-        storage_form.addRow("家計簿ファイル", path_row)
-        self.keep_check = QCheckBox("元画像をアプリ専用フォルダに保存する")
-        self.keep_check.setChecked(self.settings.keep_images)
-        storage_form.addRow("", self.keep_check)
-        self.image_folder_edit = field("記録済み画像の保存先")
-        self.image_folder_edit.setText(self.settings.image_folder)
-        image_row = QWidget()
-        image_layout = QHBoxLayout(image_row)
-        image_layout.setContentsMargins(0, 0, 0, 0)
-        image_layout.addWidget(self.image_folder_edit, 1)
-        image_browse = QPushButton("選択")
-        image_browse.clicked.connect(self._choose_image_folder)
-        image_layout.addWidget(image_browse)
-        storage_form.addRow("画像の保存先", image_row)
-        image_hint = QLabel("変更は今後の保存に適用します。以前の画像は元の保存先から引き続き表示します。")
-        image_hint.setWordWrap(True)
-        storage_form.addRow("", image_hint)
-        open_row = QHBoxLayout()
-        for label, getter in (("Excelのフォルダ", lambda: self.ledger.path.parent),
-                              ("画像のフォルダ", lambda: Path(self.settings.image_folder)),
-                              ("下書き・設定のフォルダ", app_data_dir)):
-            button = QPushButton(label)
-            button.clicked.connect(lambda _checked=False, getter=getter: self._open_folder(getter()))
-            open_row.addWidget(button)
-        storage_form.addRow("保存先を開く", open_row)
-        self.backup_limit_spin = QSpinBox()
-        self.backup_limit_spin.setRange(1, 999)
-        self.backup_limit_spin.setMaximumWidth(160)
-        self.backup_limit_spin.setSuffix(" 世代")
-        self.backup_limit_spin.setValue(self.settings.backup_generations)
-        storage_form.addRow("通常バックアップの保持数", self.backup_limit_spin)
-        retention_hint = QLabel("Excel保存時に設定した世代数まで通常バックアップを整理します。削除前・復元前の退避と一括ZIPは自動削除しません。")
-        retention_hint.setWordWrap(True)
-        storage_form.addRow("", retention_hint)
-        self.storage_usage_label = QLabel("「容量を確認」で保存データの件数・容量を表示します。")
-        self.storage_usage_label.setWordWrap(True)
-        self.storage_usage_label.setTextFormat(Qt.TextFormat.PlainText)
-        storage_form.addRow("データ容量", self.storage_usage_label)
-        usage_row = QHBoxLayout()
-        usage_btn = QPushButton("容量を確認")
-        usage_btn.clicked.connect(self._refresh_storage_usage)
-        usage_row.addWidget(usage_btn)
-        prune_btn = QPushButton("古い通常バックアップを整理")
-        prune_btn.clicked.connect(self._prune_backups_now)
-        usage_row.addWidget(prune_btn)
-        storage_form.addRow("", usage_row)
-        bundle_row = QHBoxLayout()
-        self.export_bundle_btn = QPushButton("データ一式をバックアップ")
-        self.export_bundle_btn.clicked.connect(self._export_bundle)
-        self.import_bundle_btn = QPushButton("データ一式を復元")
-        self.import_bundle_btn.clicked.connect(self._import_bundle)
-        bundle_row.addWidget(self.export_bundle_btn)
-        bundle_row.addWidget(self.import_bundle_btn)
-        storage_form.addRow("一括バックアップ", bundle_row)
-        restore_btn = QPushButton("バックアップから復元")
-        restore_btn.clicked.connect(self._restore_backup)
-        storage_form.addRow("", restore_btn)
-        discard_btn = QPushButton("下書きと画像一覧を消去")
-        discard_btn.clicked.connect(self._discard_session)
-        storage_form.addRow("", discard_btn)
-        layout.addWidget(storage_group)
-        save_settings_btn = QPushButton("設定を保存")
-        save_settings_btn.setObjectName("primary")
-        save_settings_btn.clicked.connect(self._save_settings)
-        layout.addWidget(save_settings_btn)
-        hint = QLabel("読み取り画像は LAN 内の LM Studio に送信されます。Excel ファイルはこの PC に保存されます。")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-        version_group = QGroupBox(f"アプリ情報 — v{APP_VERSION}")
-        version_layout = QVBoxLayout(version_group)
-        executable_label = QLabel(f"アプリの場所: {application_dir()}")
-        executable_label.setTextFormat(Qt.TextFormat.PlainText)
-        executable_label.setWordWrap(True)
-        version_layout.addWidget(executable_label)
-        update_btn = QPushButton("更新手順を見る")
-        update_btn.clicked.connect(self._show_update_guide)
-        version_layout.addWidget(update_btn)
-        layout.addWidget(version_group)
-        layout.addStretch()
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(root)
-        return scroll
+        return settings_panel.build(self, field, get_token())
+
+    def _copy_diagnostics(self):
+        QApplication.clipboard().setText(diagnostics.report(
+            count=len(self.entries), concurrency=self.settings.concurrent_reads))
+        self.statusBar().showMessage("診断情報をコピーしました。", 5000)
 
     def _start_task(self, task, on_success, busy_text: str):
         if self.workers:
@@ -790,7 +479,7 @@ class MainWindow(QMainWindow):
         return entry.state == "ready" and entry.draft is not None and entry.path not in self.pending_reads
 
     def _can_check(self, entry):
-        return self._can_review(entry) or (entry.state == "saved" and entry.path not in self.pending_reads)
+        return entry.state in ("pending", "failed", "ready", "saved") and entry.path not in self.pending_reads
 
     def _update_review_selection(self):
         checked = sum(entry.checked for entry in self.entries.values())
@@ -807,7 +496,7 @@ class MainWindow(QMainWindow):
         recordable = [entry for entry in self.entries.values() if entry.checked and self._can_review(entry)]
         hidden_recordable = sum(entry.path not in visible for entry in recordable)
         self.batch_save_btn.setText(f"未記録 {len(recordable)} 件をExcelに記録")
-        self.batch_save_btn.setToolTip(f"未記録のチェック {len(recordable)} 件が対象です（非表示 {hidden_recordable} 件を含む）。記録済み画像は再記録しません。")
+        self.batch_save_btn.setToolTip(f"読み取り済みの未記録 {len(recordable)} 件が対象です（非表示 {hidden_recordable} 件を含む）。未読・失敗の画像は一覧からの削除用に選択できます。")
         self.batch_save_btn.setEnabled(not self.workers and bool(recordable))
         self.remove_images_btn.setEnabled(not self.workers and bool(self.entries))
         self.remove_checked_btn.setText(f"選択 {checked} 件を一覧から削除")
@@ -1311,6 +1000,7 @@ class MainWindow(QMainWindow):
                                  source_paths={path: self._resolve_image_path(path) for path in paths},
                                  concurrency=self.settings.concurrent_reads)
         worker._connection_to_save = (normalize_base_url(self.url_edit.text()), model, self.token_edit.text().strip())
+        diagnostics.record("batch_started", count=len(paths), concurrency=self.settings.concurrent_reads)
         self.batch_worker = worker
         self.pending_reads = set(paths)
         self.workers.append(worker)
@@ -1391,6 +1081,8 @@ class MainWindow(QMainWindow):
         worker = self.batch_worker
         if worker is None:
             return
+        diagnostics.record("batch_finished", count=self.batch_progress.value(),
+                           outcome="stopped" if worker.isInterruptionRequested() else "success")
         done = sum(self.entries[path].state == "ready" for path in worker.paths)
         failed = sum(self.entries[path].state == "failed" for path in worker.paths)
         remaining = len(worker.paths) - done - failed
@@ -1472,6 +1164,9 @@ class MainWindow(QMainWindow):
             return
         message = (f"チェックした {len(prepared)} 枚を確認済みとして、税込合計 {sum(r.amount for _, r in prepared):,} 円を記録しますか？\n\n"
                    f"記録先: {self.ledger.path}")
+        excluded = sum(entry.checked and entry.state in ("pending", "failed") for entry in self.entries.values())
+        if excluded:
+            message += f"\n未読・失敗の {excluded} 枚は記録対象外です（チェックは保持します）。"
         hidden_count = sum(self._queue_item(entry.path).isHidden() for entry, _ in prepared)
         if hidden_count:
             message += f"\n一覧で非表示のチェック済みレシート {hidden_count} 件を含みます。"

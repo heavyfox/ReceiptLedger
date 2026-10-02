@@ -89,7 +89,7 @@ class QueueFilterTests(unittest.TestCase):
         self.window.queue_search.clear()
         self.filter("all")
         self.window.check_visible_btn.click()
-        self.assertEqual([p for p, e in self.window.entries.items() if e.checked], self.paths[:2] + [self.paths[4]])
+        self.assertEqual([p for p, e in self.window.entries.items() if e.checked], self.paths)
         self.assertFalse(self.window.check_visible_btn.isEnabled())
 
     def test_filter_change_retains_editor_and_draft(self):
@@ -341,8 +341,8 @@ class QueueFilterTests(unittest.TestCase):
 
     def test_mixed_checks_record_only_unsaved_and_leave_saved_selected(self):
         self.window.check_visible_btn.click()
-        self.assertIn("選択 3 件（未記録 2 件・記録済み 1 件", self.window.review_count_label.text())
-        self.assertEqual(self.window.remove_checked_btn.text(), "選択 3 件を一覧から削除")
+        self.assertIn("選択 5 件（未記録 4 件・記録済み 1 件", self.window.review_count_label.text())
+        self.assertEqual(self.window.remove_checked_btn.text(), "選択 5 件を一覧から削除")
         self.assertEqual(self.window.batch_save_btn.text(), "未記録 2 件をExcelに記録")
         self.assertIn("2 件", self.window.batch_save_btn.text())
         self.window.queue_search.setText("saved")
@@ -350,11 +350,61 @@ class QueueFilterTests(unittest.TestCase):
         with patch("app.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes) as question:
             self.window.batch_save_btn.click()
         self.assertIn("チェックした 2 枚", question.call_args.args[2])
+        self.assertIn("未読・失敗の 2 枚は記録対象外", question.call_args.args[2])
         self.assertEqual(len(self.window.ledger.load()), 2)
         self.assertTrue(self.window.entries[self.paths[4]].checked)
+        self.assertTrue(all(self.window.entries[p].checked for p in self.paths[2:4]))
         self.assertFalse(self.window.entries[self.paths[0]].checked)
         self.assertFalse(self.window.batch_save_btn.isEnabled())
         self.assertIn("0 件", self.window.batch_save_btn.text())
+
+    def test_unread_and_failed_can_be_checked_by_keyboard_and_restored(self):
+        from PySide6.QtTest import QTest
+        for index in (2, 3):
+            self.window.queue.setCurrentRow(index)
+            item = self.window.queue.item(index)
+            self.assertTrue(item.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+            QTest.keyClick(self.window.queue, Qt.Key.Key_Space)
+            self.assertTrue(self.window.entries[self.paths[index]].checked)
+        self.assertFalse(self.window.batch_save_btn.isEnabled())
+        self.assertTrue(self.window.remove_checked_btn.isEnabled())
+        self.window.close()
+        self.window = MainWindow()
+        for path, state in zip(self.paths[2:4], ("pending", "failed")):
+            self.assertTrue(self.window.entries[path].checked)
+            self.assertEqual(self.window.entries[path].state, state)
+            self.assertEqual(self.window._queue_item(path).checkState(), Qt.CheckState.Checked)
+
+    def test_bulk_remove_unread_and_failed_with_hidden_selection_and_undo(self):
+        self.filter("pending")
+        self.window.check_visible_btn.click()
+        self.filter("failed")
+        self.window.check_visible_btn.click()
+        self.assertEqual([p for p, e in self.window.entries.items() if e.checked], self.paths[2:4])
+        self.assertFalse(self.window.batch_save_btn.isEnabled())
+        with patch("app.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes) as question:
+            self.window.remove_checked_btn.click()
+        self.assertIn("未記録の画像: 2 件", question.call_args.args[2])
+        self.assertIn("非表示の画像 1 件", question.call_args.args[2])
+        self.assertTrue(all(p not in self.window.entries for p in self.paths[2:4]))
+        self.assertTrue(all(Path(p).is_file() for p in self.paths))
+        self.assertFalse(self.window.ledger.path.exists())
+        self.window.close()
+        self.window = MainWindow()
+        self.assertTrue(all(p not in self.window.entries for p in self.paths[2:4]))
+        self.window.undo_remove_btn.click()
+        self.assertEqual(list(self.window.entries), self.paths)
+        self.assertEqual([self.window.entries[p].state for p in self.paths[2:4]], ["pending", "failed"])
+        self.assertTrue(all(self.window.entries[p].checked for p in self.paths[2:4]))
+
+    def test_waiting_and_reading_images_are_excluded_from_checking(self):
+        self.window.pending_reads.add(self.paths[2])
+        self.window.entries[self.paths[3]].state = "reading"
+        for path in self.paths[2:4]:
+            self.window._refresh_queue_item(path)
+            self.assertFalse(self.window._queue_item(path).flags() & Qt.ItemFlag.ItemIsUserCheckable)
+        self.window.check_visible_btn.click()
+        self.assertFalse(any(self.window.entries[p].checked for p in self.paths[2:4]))
 
     def test_undo_restores_order_draft_checks_and_view_after_restart(self):
         self.window.queue.setCurrentRow(0)

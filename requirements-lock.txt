@@ -1,4 +1,4 @@
-# Exact Python package versions used for the 1.4.2 release.
+# Exact Python package versions used for the 1.5.1 release.
 -r requirements.txt
 altgraph==0.17.5
 et_xmlfile==2.0.0

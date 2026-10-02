@@ -36,14 +36,16 @@ def verify(folder):
         required = ("LICENSE", "README.md", "version.py", "THIRD_PARTY_NOTICES.md",
                     "THIRD_PARTY_SOURCES.json", "requirements-lock.txt", "vendor/SHA256SUMS.txt",
                     ".github/workflows/windows.yml", ".github/ISSUE_TEMPLATE/bug_report.md",
-                    "docs/RELEASE_NOTES.md", "test_connection_settings.py", "test_config.py")
+                    "docs/RELEASE_NOTES.md", "test_connection_settings.py", "test_config.py",
+                    "diagnostics.py", "receipt_panel.py", "settings_panel.py", "excel_validation.py",
+                    "test_diagnostics.py", "test_excel_validation.py", "docs/ARCHITECTURE.md")
         for name in required:
             if prefix + name not in source.namelist():
                 raise ValueError(f"Missing public source file: {name}")
         for name in source.namelist():
             relative = name.removeprefix(prefix)
             parts = PurePosixPath(relative).parts
-            if parts[0] in ("data", "build", "dist", ".git", "qa") or parts[0].startswith(".venv"):
+            if parts[0] in ("data", "build", "dist", ".git", "qa", "logs") or parts[0].startswith(".venv"):
                 raise ValueError(f"Private/development folder: {relative}")
             if parts[-1] == "settings.json" or parts[-1].startswith("draft-session"):
                 raise ValueError(f"User state in release: {relative}")
